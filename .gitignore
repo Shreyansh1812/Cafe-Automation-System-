@@ -34,3 +34,5 @@ dist-ssr
 #Important Credentials 
 .env
 .env.example
+.lovable
+
