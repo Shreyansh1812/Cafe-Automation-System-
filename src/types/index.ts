@@ -29,6 +29,10 @@ export interface DashboardStats {
   totalVisits: number;
   lifetimeRevenue: number;
   activeCoupons: number;
+  previousCustomers?: number;
+  previousVisits?: number;
+  previousRevenue?: number;
+  previousCoupons?: number;
   trend: TrendPoint[];
   recentVisits: Array<{
     id: string;
@@ -37,6 +41,14 @@ export interface DashboardStats {
     amount: number;
     timestamp: string;
   }>;
+}
+
+export interface TopCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  total_visits: number;
+  lifetime_spent: number;
 }
 
 export interface ApiSuccess<T = Record<string, unknown>> {

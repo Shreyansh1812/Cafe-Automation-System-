@@ -1,9 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { Customer, DashboardStats, Tenant } from "@/types";
+import type { Customer, DashboardStats, Tenant, TopCustomer } from "@/types";
 import type { Role } from "@/lib/auth";
 import { toast } from "sonner";
 
-const metaEnv = typeof import.meta !== "undefined" && import.meta.env ? import.meta.env : {};
+const metaEnv = (typeof import.meta !== "undefined" && import.meta.env ? import.meta.env : {}) as any;
 const N8N_BASE_URL = metaEnv.VITE_N8N_WEBHOOK_BASE_URL || process.env.VITE_N8N_WEBHOOK_BASE_URL || "http://localhost:5678/webhook";
 const N8N_REDEMPTION_URL = metaEnv.VITE_N8N_REDEMPTION_WEBHOOK_URL || process.env.VITE_N8N_REDEMPTION_WEBHOOK_URL || `${N8N_BASE_URL}/redemption`;
 const N8N_HEADER_NAME = metaEnv.VITE_N8N_HEADER_NAME || process.env.VITE_N8N_HEADER_NAME || "Agency-Token";
@@ -34,6 +34,12 @@ export const loginServerFn = createServerFn({ method: "POST" })
     const { sql } = await import("./db");
     const bcrypt = await import("bcryptjs");
 
+    console.log('[DIAGNOSTIC] Login attempt:', {
+        email: data.email,
+        password_received: data.password ? 'YES' : 'NO',
+        password_length: data.password ? data.password.length : 0
+    });
+
     try {
       const email = data.email.trim().toLowerCase();
       
@@ -48,11 +54,11 @@ export const loginServerFn = createServerFn({ method: "POST" })
             email: "shreyansh@admin.com",
           };
         } else {
-          return { success: false as const, message: "Invalid email or password" };
+          return { success: false as const, message: "Incorrect password. Please try again." };
         }
       }
 
-      // 2. Check baristas table
+      // 2. Check baristas table (only active baristas can login)
       const baristas = await sql`
         SELECT b.barista_id, b.name, b.email, b.password_hash, b.tenant_id, t.business_name
         FROM baristas b
@@ -61,11 +67,31 @@ export const loginServerFn = createServerFn({ method: "POST" })
         LIMIT 1
       `;
 
+      console.log('[DIAGNOSTIC] Barista query result:', {
+          found: baristas && baristas.length > 0,
+          hash_present: baristas?.[0]?.password_hash ? 'YES' : 'NO',
+          hash_length: baristas?.[0]?.password_hash?.length || 0,
+          hash_start: baristas?.[0]?.password_hash?.substring(0, 10) || 'N/A'
+      });
+
       if (baristas && baristas.length > 0) {
         const barista = baristas[0];
+        
+        console.log('[DIAGNOSTIC] Comparing passwords for barista:', {
+            email: barista.email,
+            hash_length: barista.password_hash.length,
+            is_valid_bcrypt: barista.password_hash.startsWith('$2b$')
+        });
+
         const isMatch = await bcrypt.default.compare(data.password, barista.password_hash);
+        
+        console.log('[DIAGNOSTIC] Password comparison result:', {
+            isMatch,
+            email: barista.email
+        });
+
         if (!isMatch) {
-          return { success: false as const, message: "Invalid email or password" };
+          return { success: false as const, message: "Incorrect password. Please try again." };
         }
         return {
           success: true as const,
@@ -85,14 +111,35 @@ export const loginServerFn = createServerFn({ method: "POST" })
         LIMIT 1
       `;
 
+      console.log('[DIAGNOSTIC] Tenant query result:', {
+          found: tenants && tenants.length > 0,
+          hash_present: tenants?.[0]?.password_hash ? 'YES' : 'NO',
+          hash_length: tenants?.[0]?.password_hash?.length || 0,
+          hash_start: tenants?.[0]?.password_hash?.substring(0, 10) || 'N/A'
+      });
+
       if (tenants && tenants.length > 0) {
         const tenant = tenants[0];
         if (!tenant.password_hash) {
-          return { success: false as const, message: "Workspace not fully activated" };
+          console.log('[DIAGNOSTIC] Tenant uses Google Sign-In');
+          return { success: false as const, message: "This account uses Google Sign-In. Please use Google to log in." };
         }
+
+        console.log('[DIAGNOSTIC] Comparing passwords for tenant:', {
+            email: tenant.email,
+            hash_length: tenant.password_hash.length,
+            is_valid_bcrypt: tenant.password_hash.startsWith('$2b$')
+        });
+
         const isMatch = await bcrypt.default.compare(data.password, tenant.password_hash);
+
+        console.log('[DIAGNOSTIC] Password comparison result:', {
+            isMatch,
+            email: tenant.email
+        });
+
         if (!isMatch) {
-          return { success: false as const, message: "Invalid email or password" };
+          return { success: false as const, message: "Incorrect password. Please try again." };
         }
         return {
           success: true as const,
@@ -104,9 +151,10 @@ export const loginServerFn = createServerFn({ method: "POST" })
         };
       }
 
-      return { success: false as const, message: "Invalid email or password" };
+      // 4. No account found
+      return { success: false as const, message: "No account found with this email. Please sign up first." };
     } catch (err: any) {
-      console.error("Database authentication error:", err);
+      console.error("[DIAGNOSTIC] Database authentication error:", err);
       return { success: false as const, message: "Internal server authentication error" };
     }
   });
@@ -277,6 +325,31 @@ export const getDashboardStatsServerFn = createServerFn({ method: "GET" })
         WHERE tenant_id = ${tenantId} AND is_redeemed = false AND expires_at > NOW()
       `;
 
+      // 4.5. Get previous period stats (for percentage calculations)
+      const [prevCustCount] = await sql`
+        SELECT COUNT(*)::int as count FROM customers 
+        WHERE tenant_id = ${tenantId} AND deleted_at IS NULL AND created_at < NOW() - INTERVAL '30 days'
+      `;
+
+      const [prevVisitCount] = await sql`
+        SELECT COUNT(*)::int as count FROM visits 
+        WHERE tenant_id = ${tenantId} AND visit_date < NOW() - INTERVAL '30 days'
+      `;
+
+      const [prevRevSum] = await sql`
+        SELECT COALESCE(SUM(amount_spent), 0)::float as revenue 
+        FROM visits 
+        WHERE tenant_id = ${tenantId} AND visit_date < NOW() - INTERVAL '30 days'
+      `;
+
+      const [prevCouponCount] = await sql`
+        SELECT COUNT(*)::int as count FROM active_coupons 
+        WHERE tenant_id = ${tenantId} 
+          AND created_at < NOW() - INTERVAL '30 days'
+          AND (is_redeemed = false OR redeemed_at > NOW() - INTERVAL '30 days')
+          AND (expires_at > NOW() - INTERVAL '30 days' OR expires_at IS NULL)
+      `;
+
       // 5. Get 7-day trend data
       const trendRaw = await sql`
         SELECT 
@@ -337,6 +410,10 @@ export const getDashboardStatsServerFn = createServerFn({ method: "GET" })
         totalVisits: visitCount?.count || 0,
         lifetimeRevenue: revSum?.revenue || 0,
         activeCoupons: couponCount?.count || 0,
+        previousCustomers: prevCustCount?.count || 0,
+        previousVisits: prevVisitCount?.count || 0,
+        previousRevenue: prevRevSum?.revenue || 0,
+        previousCoupons: prevCouponCount?.count || 0,
         trend,
         recentVisits,
       };
@@ -348,6 +425,10 @@ export const getDashboardStatsServerFn = createServerFn({ method: "GET" })
         totalVisits: 0,
         lifetimeRevenue: 0,
         activeCoupons: 0,
+        previousCustomers: 0,
+        previousVisits: 0,
+        previousRevenue: 0,
+        previousCoupons: 0,
         trend: [],
         recentVisits: [],
       };
@@ -383,18 +464,22 @@ export const getCustomersServerFn = createServerFn({ method: "GET" })
 
 // Server function for analytics data
 export const getAnalyticsServerFn = createServerFn({ method: "GET" })
-  .validator((tenantId: string) => tenantId)
-  .handler(async ({ data: tenantId }) => {
+  .validator((data: { tenantId: string; range: '7d' | '30d' | '90d' }) => data)
+  .handler(async ({ data }) => {
+    const { tenantId, range } = data;
     const { sql } = await import("./db");
 
     try {
+      const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
+      const intervalStr = `${days} days`;
+
       const revenueRaw = await sql`
         SELECT 
           DATE(visit_date)::text as date,
           COALESCE(SUM(amount_spent), 0)::float as revenue,
           COUNT(*)::int as visits
         FROM visits
-        WHERE tenant_id = ${tenantId} AND visit_date >= NOW() - INTERVAL '30 days'
+        WHERE tenant_id = ${tenantId} AND visit_date >= NOW() - CAST(${intervalStr} AS interval)
         GROUP BY DATE(visit_date)
         ORDER BY date ASC
       `;
@@ -404,7 +489,7 @@ export const getAnalyticsServerFn = createServerFn({ method: "GET" })
           DATE(created_at)::text as date,
           COUNT(*)::int as new_customers
         FROM customers
-        WHERE tenant_id = ${tenantId} AND created_at >= NOW() - INTERVAL '30 days' AND deleted_at IS NULL
+        WHERE tenant_id = ${tenantId} AND created_at >= NOW() - CAST(${intervalStr} AS interval) AND deleted_at IS NULL
         GROUP BY DATE(created_at)
         ORDER BY date ASC
       `;
@@ -422,17 +507,36 @@ export const getAnalyticsServerFn = createServerFn({ method: "GET" })
         LIMIT 5
       `;
 
+      const [activeCustRes] = await sql`
+        SELECT COUNT(DISTINCT customer_id)::int as count 
+        FROM visits 
+        WHERE tenant_id = ${tenantId} AND visit_date >= NOW() - CAST(${intervalStr} AS interval)
+      `;
+
+      const totalRevenue = revenueRaw.reduce((sum: number, r: any) => sum + (r.revenue || 0), 0);
+      const totalVisits = revenueRaw.reduce((sum: number, r: any) => sum + (r.visits || 0), 0);
+      const avgSpend = totalVisits > 0 ? totalRevenue / totalVisits : 0;
+      const activeCustomers = activeCustRes?.count || 0;
+
       return {
         revenue: revenueRaw,
         growth: growthRaw,
-        topCustomers,
+        topCustomers: topCustomers as unknown as TopCustomer[],
+        totalRevenue,
+        totalVisits,
+        avgSpend,
+        activeCustomers,
       };
     } catch (err) {
       console.error("Analytics query error:", err);
       return {
         revenue: [],
         growth: [],
-        topCustomers: [],
+        topCustomers: [] as TopCustomer[],
+        totalRevenue: 0,
+        totalVisits: 0,
+        avgSpend: 0,
+        activeCustomers: 0,
       };
     }
   });
@@ -506,18 +610,82 @@ export const createBaristaServerFn = createServerFn({ method: "POST" })
     const { sql } = await import("./db");
     const bcrypt = await import("bcryptjs");
 
+    console.log('[DIAGNOSTIC] Barista creation started:', {
+        tenant_id: data.tenant_id,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        password_received: data.password ? 'YES' : 'NO',
+        password_length: data.password ? data.password.length : 0
+    });
+
     try {
+      const email = data.email.trim().toLowerCase();
+
+      // Check if an active barista exists with this email
+      const activeBaristas = await sql`
+        SELECT barista_id FROM baristas
+        WHERE email = ${email} AND tenant_id = ${data.tenant_id} AND deleted_at IS NULL
+        LIMIT 1
+      `;
+      if (activeBaristas.length > 0) {
+        return {
+          success: false as const,
+          code: "DUPLICATE_EMAIL",
+          message: "This email is already registered to an active barista. Please use a different email."
+        };
+      }
+
+      // Check if a soft-deleted barista exists with this email
+      const deletedBaristas = await sql`
+        SELECT barista_id FROM baristas
+        WHERE email = ${email} AND tenant_id = ${data.tenant_id} AND deleted_at IS NOT NULL
+        LIMIT 1
+      `;
+
       const hashedPassword = await bcrypt.default.hash(data.password, 10);
+
+      console.log('[DIAGNOSTIC] Password hashed:', {
+          hash_length: hashedPassword.length,
+          hash_start: hashedPassword.substring(0, 10) + '...',
+          is_valid_bcrypt: hashedPassword.startsWith('$2b$')
+      });
+
+      if (deletedBaristas.length > 0) {
+        // Reactivate the soft-deleted record
+        const baristaId = deletedBaristas[0].barista_id;
+        await sql`
+          UPDATE baristas
+          SET name = ${data.name}, phone = ${data.phone}, password_hash = ${hashedPassword},
+              deleted_at = NULL, updated_at = NOW()
+          WHERE barista_id = ${baristaId}
+        `;
+
+        console.log('[DIAGNOSTIC] Barista reactivated successfully:', {
+            barista_id: baristaId,
+            email: email
+        });
+
+        return { success: true as const, barista_id: baristaId as string };
+      }
+
+      // Create a new active record
       const [barista] = await sql`
         INSERT INTO baristas (
           tenant_id, name, email, phone, password_hash
         ) VALUES (
-          ${data.tenant_id}, ${data.name}, ${data.email.trim().toLowerCase()}, ${data.phone}, ${hashedPassword}
+          ${data.tenant_id}, ${data.name}, ${email}, ${data.phone}, ${hashedPassword}
         ) RETURNING barista_id
       `;
+
+      console.log('[DIAGNOSTIC] Barista created successfully:', {
+          barista_id: barista.barista_id,
+          email: email
+      });
+
       return { success: true as const, barista_id: barista.barista_id as string };
     } catch (err: any) {
-      console.error("Barista creation error:", err);
+      console.error('[DIAGNOSTIC] Barista creation failed:', err);
       if (err.code === "23505" || err.message?.includes("baristas_email_key")) {
         return {
           success: false as const,
@@ -529,23 +697,67 @@ export const createBaristaServerFn = createServerFn({ method: "POST" })
     }
   });
 
-// Server function to check if a barista email exists
+// Server function to check if a barista email exists (returns detail on active/deleted status)
 export const checkBaristaEmailServerFn = createServerFn({ method: "GET" })
   .validator((payload: { email: string; tenantId: string }) => payload)
   .handler(async ({ data }) => {
     const { sql } = await import("./db");
 
     try {
-      const result = await sql`
-        SELECT EXISTS (
-          SELECT 1 FROM baristas
-          WHERE email = ${data.email.trim().toLowerCase()} AND deleted_at IS NULL
-        ) as exists
+      const activeResult = await sql`
+        SELECT barista_id FROM baristas
+        WHERE email = ${data.email.trim().toLowerCase()} AND tenant_id = ${data.tenantId} AND deleted_at IS NULL
+        LIMIT 1
       `;
-      return { exists: !!result[0]?.exists };
+      if (activeResult.length > 0) {
+        return { exists: true, deleted: false, barista_id: null };
+      }
+
+      const deletedResult = await sql`
+        SELECT barista_id FROM baristas
+        WHERE email = ${data.email.trim().toLowerCase()} AND tenant_id = ${data.tenantId} AND deleted_at IS NOT NULL
+        LIMIT 1
+      `;
+      if (deletedResult.length > 0) {
+        return { exists: false, deleted: true, barista_id: deletedResult[0].barista_id as string };
+      }
+
+      return { exists: false, deleted: false, barista_id: null };
     } catch (err) {
       console.error("Check email error:", err);
-      return { exists: false };
+      return { exists: false, deleted: false, barista_id: null };
+    }
+  });
+
+// Server function for reactivating a soft-deleted barista
+export const reactivateBaristaServerFn = createServerFn({ method: "POST" })
+  .validator((payload: { baristaId: string; name: string; phone: string; password?: string }) => payload)
+  .handler(async ({ data }) => {
+    const { sql } = await import("./db");
+    const bcrypt = await import("bcryptjs");
+
+    try {
+      let barista;
+      if (data.password) {
+        const hashedPassword = await bcrypt.default.hash(data.password, 10);
+        [barista] = await sql`
+          UPDATE baristas
+          SET deleted_at = NULL, name = ${data.name}, phone = ${data.phone}, password_hash = ${hashedPassword}, updated_at = NOW()
+          WHERE barista_id = ${data.baristaId}
+          RETURNING barista_id as id, name, email, phone
+        `;
+      } else {
+        [barista] = await sql`
+          UPDATE baristas
+          SET deleted_at = NULL, name = ${data.name}, phone = ${data.phone}, updated_at = NOW()
+          WHERE barista_id = ${data.baristaId}
+          RETURNING barista_id as id, name, email, phone
+        `;
+      }
+      return { success: true as const, barista };
+    } catch (err: any) {
+      console.error("Barista reactivation error:", err);
+      return { success: false as const, message: err.message || "Failed to reactivate barista" };
     }
   });
 
@@ -585,6 +797,53 @@ export const deleteBaristaServerFn = createServerFn({ method: "POST" })
     } catch (err: any) {
       console.error("Barista deletion error:", err);
       return { success: false as const, message: err.message || "Failed to delete barista" };
+    }
+  });
+
+// Server function for updating a barista's details
+export const updateBaristaServerFn = createServerFn({ method: "POST" })
+  .validator((data: { baristaId: string; name: string; email: string; phone: string }) => data)
+  .handler(async ({ data }) => {
+    const { sql } = await import("./db");
+
+    try {
+      const [barista] = await sql`
+        UPDATE baristas
+        SET name = ${data.name}, email = ${data.email.trim().toLowerCase()}, phone = ${data.phone}, updated_at = NOW()
+        WHERE barista_id = ${data.baristaId}
+        RETURNING barista_id as id, name, email, phone
+      `;
+      return { success: true as const, barista };
+    } catch (err: any) {
+      console.error("Barista update error:", err);
+      if (err.code === "23505" || err.message?.includes("baristas_email_key")) {
+        return {
+          success: false as const,
+          code: "DUPLICATE_EMAIL",
+          message: "This email is already registered. Please use a different email address."
+        };
+      }
+      return { success: false as const, message: err.message || "Failed to update barista" };
+    }
+  });
+
+// Server function for updating a customer's details
+export const updateCustomerServerFn = createServerFn({ method: "POST" })
+  .validator((data: { customerId: string; name: string; phone: string; birthday: string }) => data)
+  .handler(async ({ data }) => {
+    const { sql } = await import("./db");
+
+    try {
+      const [customer] = await sql`
+        UPDATE customers
+        SET name = ${data.name}, phone = ${data.phone}, birthday = ${data.birthday || null}, updated_at = NOW()
+        WHERE customer_id = ${data.customerId}
+        RETURNING customer_id as id, name, phone, birthday, total_visits, lifetime_spend as lifetime_spent, last_visit
+      `;
+      return { success: true as const, customer };
+    } catch (err: any) {
+      console.error("Customer update error:", err);
+      return { success: false as const, message: err.message || "Failed to update customer" };
     }
   });
 
@@ -758,11 +1017,19 @@ export const api = {
 
   checkBaristaEmail: async (email: string, tenantId: string) => {
     try {
-      const res = await checkBaristaEmailServerFn({ data: { email, tenantId } });
-      return res.exists;
+      return await checkBaristaEmailServerFn({ data: { email, tenantId } });
     } catch (err) {
       console.warn("Error checking barista email:", err);
-      return false;
+      return { exists: false, deleted: false, barista_id: null };
+    }
+  },
+
+  reactivateBarista: async (baristaId: string, data: { name: string; phone: string; password?: string }) => {
+    try {
+      return await reactivateBaristaServerFn({ data: { baristaId, ...data } });
+    } catch (err: any) {
+      console.error("Error reactivating barista:", err);
+      return { success: false as const, message: err?.message || "Failed to reactivate barista" };
     }
   },
 
@@ -784,15 +1051,37 @@ export const api = {
     }
   },
 
-  getAnalytics: async (tenantId: string) => {
+  updateBarista: async (baristaId: string, data: { name: string; email: string; phone: string }) => {
     try {
-      return await getAnalyticsServerFn({ data: tenantId });
+      return await updateBaristaServerFn({ data: { baristaId, ...data } });
+    } catch (err: any) {
+      console.error("Error updating barista:", err);
+      return { success: false as const, message: err?.message || "Failed to update barista" };
+    }
+  },
+
+  updateCustomer: async (customerId: string, data: { name: string; phone: string; birthday: string }) => {
+    try {
+      return await updateCustomerServerFn({ data: { customerId, ...data } });
+    } catch (err: any) {
+      console.error("Error updating customer:", err);
+      return { success: false as const, message: err?.message || "Failed to update customer" };
+    }
+  },
+
+  getAnalytics: async (tenantId: string, range: '7d' | '30d' | '90d' = '30d') => {
+    try {
+      return await getAnalyticsServerFn({ data: { tenantId, range } });
     } catch (err: any) {
       console.error("Error loading analytics:", err);
       return {
         revenue: [],
         growth: [],
         topCustomers: [],
+        totalRevenue: 0,
+        totalVisits: 0,
+        avgSpend: 0,
+        activeCustomers: 0,
       };
     }
   },

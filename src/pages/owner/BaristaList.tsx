@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Plus, Loader2, User, Phone, Mail, Lock, Trash } from "lucide-react";
+import { Plus, Loader2, User, Phone, Mail, Lock, Trash, Edit } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { useAuth } from "@/lib/auth";
@@ -107,11 +107,23 @@ export function BaristaList() {
 
     setValidatingEmail(true);
     try {
-      const emailExists = await api.checkBaristaEmail(form.email, tenantId);
-      if (emailExists) {
-        toast.error("This email is already registered as a barista. Please use a different email.");
+      const checkResult = await api.checkBaristaEmail(form.email, tenantId);
+      if (checkResult.exists) {
+        toast.error("This email is already registered as an active barista. Please use a different email.");
         setValidatingEmail(false);
         return;
+      }
+      if (checkResult.deleted && checkResult.barista_id) {
+        if (window.confirm(`A barista with this email was previously deleted. Would you like to reactivate them instead of creating a new account?`)) {
+          reactivateMutation.mutate({
+            baristaId: checkResult.barista_id,
+            name: form.name,
+            phone: form.phone,
+            password: form.password,
+          });
+          setValidatingEmail(false);
+          return;
+        }
       }
     } catch (err) {
       console.warn("Pre-submission email check failed, proceeding anyway.");
@@ -121,6 +133,26 @@ export function BaristaList() {
 
     mutation.mutate(form);
   };
+
+  const reactivateMutation = useMutation({
+    mutationFn: (data: { baristaId: string; name: string; phone: string; password?: string }) =>
+      api.reactivateBarista(data.baristaId, { name: data.name, phone: data.phone, password: data.password }),
+    onSuccess: (res) => {
+      if (res.success) {
+        toast.success("Barista reactivated successfully!", {
+          description: `${form.name} can now sign in to Crema.`,
+        });
+        setOpen(false);
+        setForm({ name: "", email: "", phone: "", password: "" });
+        qc.invalidateQueries({ queryKey: ["baristas", tenantId] });
+      } else {
+        toast.error(res.message || "Could not reactivate barista");
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to reactivate barista");
+    },
+  });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteBarista(id),
@@ -142,6 +174,33 @@ export function BaristaList() {
       deleteMutation.mutate(id);
     }
   };
+
+  const [editingBarista, setEditingBarista] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "", phone: "" });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: typeof editForm) =>
+      api.updateBarista(editingBarista.id, {
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+      }),
+    onSuccess: (res) => {
+      if (res.success) {
+        toast.success("Barista updated", {
+          description: `${editForm.name}'s details have been saved.`,
+        });
+        setEditingBarista(null);
+        setEditForm({ name: "", email: "", phone: "" });
+        qc.invalidateQueries({ queryKey: ["baristas", tenantId] });
+      } else {
+        toast.error(res.message || "Could not update barista");
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to update barista");
+    },
+  });
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -219,15 +278,29 @@ export function BaristaList() {
                       }) : "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(b.id, b.name)}
-                        disabled={deleteMutation.isPending}
-                        className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
-                      >
-                        <Trash className="h-4 w-4" />
-                      </Button>
+                      <div className="flex justify-end gap-1.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            setEditingBarista(b);
+                            setEditForm({ name: b.name, email: b.email, phone: b.phone || "" });
+                          }}
+                          disabled={deleteMutation.isPending || updateMutation.isPending}
+                          className="h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-lg cursor-pointer"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(b.id, b.name)}
+                          disabled={deleteMutation.isPending || updateMutation.isPending}
+                          className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer"
+                        >
+                          <Trash className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
@@ -319,6 +392,95 @@ export function BaristaList() {
               >
                 {(mutation.isPending || validatingEmail) && <Loader2 className="h-4 w-4 animate-spin" />}
                 {mutation.isPending || validatingEmail ? "Creating…" : "Create Barista"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Barista Dialog */}
+      <Dialog open={!!editingBarista} onOpenChange={(o) => !o && !updateMutation.isPending && setEditingBarista(null)}>
+        <DialogContent className="rounded-2xl sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Barista Details</DialogTitle>
+            <DialogDescription>
+              Update the name, email, or phone number of this staff member.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!editForm.name.trim() || !editForm.email.trim()) {
+                toast.error("Name and Email are required.");
+                return;
+              }
+              if (!isValidEmail(editForm.email)) {
+                toast.error("Please enter a valid email address.");
+                return;
+              }
+              updateMutation.mutate(editForm);
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-name">Full Name</Label>
+              <div className="relative">
+                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  id="edit-name"
+                  required
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  placeholder="Amelia Chen"
+                  className="h-10 pl-9 rounded-xl focus-visible:ring-amber-500/20"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-email">Email address</Label>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  id="edit-email"
+                  type="email"
+                  required
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  placeholder="barista@cafe.com"
+                  className="h-10 pl-9 rounded-xl focus-visible:ring-amber-500/20"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-phone">Phone number</Label>
+              <div className="relative">
+                <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  id="edit-phone"
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                  placeholder="+91 98765 43210"
+                  className="h-10 pl-9 rounded-xl focus-visible:ring-amber-500/20"
+                />
+              </div>
+            </div>
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditingBarista(null)}
+                disabled={updateMutation.isPending}
+                className="h-10 rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={updateMutation.isPending}
+                className="h-10 gap-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800"
+              >
+                {updateMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                {updateMutation.isPending ? "Saving…" : "Save Changes"}
               </Button>
             </DialogFooter>
           </form>

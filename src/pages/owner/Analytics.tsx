@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
@@ -11,18 +12,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { TrendingUp, Users, ArrowUpRight, DollarSign, Award } from "lucide-react";
+import { TrendingUp, Users, DollarSign, Award, ShoppingBag } from "lucide-react";
 import { api } from "@/services/api";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { TopCustomersTable } from "@/components/shared/TopCustomersTable";
 
 function formatCurrency(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
@@ -34,42 +29,80 @@ function formatDate(dateStr: string) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+type DateRange = "7d" | "30d" | "90d";
+
+const containerVariants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.08, delayChildren: 0.05 } },
+};
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 12 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4 } },
+};
+
 export function Analytics() {
   const { user } = useAuth();
   const tenantId = user?.tenant_id ?? "";
+  const [dateRange, setDateRange] = useState<DateRange>("30d");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["analytics", tenantId],
-    queryFn: () => api.getAnalytics(tenantId),
+    queryKey: ["analytics", tenantId, dateRange],
+    queryFn: () => api.getAnalytics(tenantId, dateRange),
     enabled: !!tenantId,
+    refetchInterval: 30000, // Auto-refresh in background every 30 seconds
   });
 
-  const totalRevenue = data?.revenue.reduce((sum: number, r: any) => sum + r.revenue, 0) || 0;
-  const totalVisits = data?.revenue.reduce((sum: number, r: any) => sum + r.visits, 0) || 0;
-  const totalNewCustomers = data?.growth.reduce((sum: number, g: any) => sum + g.new_customers, 0) || 0;
-
-  const chartData = data?.revenue.map((r: any) => ({
+  const chartData = data?.revenue?.map((r: any) => ({
     date: formatDate(r.date),
     revenue: r.revenue,
     visits: r.visits,
   })) || [];
 
-  const growthData = data?.growth.map((g: any) => ({
+  const growthData = data?.growth?.map((g: any) => ({
     date: formatDate(g.date),
     newCustomers: g.new_customers,
   })) || [];
 
+  const rangeText = dateRange === "7d" ? "7 Days" : dateRange === "30d" ? "30 Days" : "90 Days";
+
   return (
     <div className="mx-auto max-w-7xl space-y-8">
-      {/* Page Heading */}
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">Analytics</h1>
-        <p className="text-sm text-slate-500">In-depth insights into your cafe's revenue and audience trends.</p>
+      {/* Page Heading and Filter */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900">Analytics</h1>
+          <p className="text-sm text-slate-500">In-depth insights into your cafe's revenue and audience trends.</p>
+        </div>
+
+        {/* Date Range Selector */}
+        <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1 w-fit">
+          {(["7d", "30d", "90d"] as const).map((range) => (
+            <button
+              key={range}
+              onClick={() => setDateRange(range)}
+              className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition-all ${
+                dateRange === range
+                  ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/50"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              {range === "7d" ? "7 Days" : range === "30d" ? "30 Days" : "90 Days"}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {/* KPI Cards Grid */}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+      >
+        {/* Total Revenue */}
         <motion.div
+          variants={cardVariants}
           whileHover={{ y: -2 }}
           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
         >
@@ -77,19 +110,21 @@ export function Analytics() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-200/50">
               <DollarSign className="h-4 w-4" />
             </div>
-            <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-              30 Days
+            <span className="text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+              {rangeText}
             </span>
           </div>
           <div className="mt-4">
-            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">30D Revenue</div>
+            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">Total Revenue</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {isLoading ? <Skeleton className="h-7 w-28" /> : formatCurrency(totalRevenue)}
+              {isLoading ? <Skeleton className="h-7 w-28" /> : formatCurrency(data?.totalRevenue || 0)}
             </div>
           </div>
         </motion.div>
 
+        {/* Total Visits */}
         <motion.div
+          variants={cardVariants}
           whileHover={{ y: -2 }}
           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
         >
@@ -97,19 +132,43 @@ export function Analytics() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/50">
               <TrendingUp className="h-4 w-4" />
             </div>
-            <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-              30 Days
+            <span className="text-[11px] font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+              {rangeText}
             </span>
           </div>
           <div className="mt-4">
-            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">30D Total Visits</div>
+            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">Total Visits</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {isLoading ? <Skeleton className="h-7 w-20" /> : totalVisits.toLocaleString()}
+              {isLoading ? <Skeleton className="h-7 w-20" /> : (data?.totalVisits || 0).toLocaleString()}
             </div>
           </div>
         </motion.div>
 
+        {/* Avg Spend per Visit */}
         <motion.div
+          variants={cardVariants}
+          whileHover={{ y: -2 }}
+          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/50">
+              <ShoppingBag className="h-4 w-4" />
+            </div>
+            <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+              {rangeText}
+            </span>
+          </div>
+          <div className="mt-4">
+            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">Avg. Spend per Visit</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+              {isLoading ? <Skeleton className="h-7 w-24" /> : formatCurrency(data?.avgSpend || 0)}
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Active Customers */}
+        <motion.div
+          variants={cardVariants}
           whileHover={{ y: -2 }}
           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
         >
@@ -117,18 +176,18 @@ export function Analytics() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-700 ring-1 ring-rose-200/50">
               <Users className="h-4 w-4" />
             </div>
-            <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-              30 Days
+            <span className="text-[11px] font-medium text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full">
+              {rangeText}
             </span>
           </div>
           <div className="mt-4">
-            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">New Customers</div>
+            <div className="text-[12px] font-medium uppercase tracking-wider text-slate-500">Active Customers</div>
             <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {isLoading ? <Skeleton className="h-7 w-16" /> : totalNewCustomers.toLocaleString()}
+              {isLoading ? <Skeleton className="h-7 w-16" /> : (data?.activeCustomers || 0).toLocaleString()}
             </div>
           </div>
         </motion.div>
-      </div>
+      </motion.div>
 
       {/* Charts Grid */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -141,15 +200,16 @@ export function Analytics() {
         >
           <div className="mb-4">
             <h2 className="text-base font-semibold tracking-tight text-slate-900">Daily Revenue History</h2>
-            <p className="text-xs text-slate-500">Last 30 days performance</p>
+            <p className="text-xs text-slate-500">Performance in selected period</p>
           </div>
           <div className="h-72 w-full">
             {isLoading ? (
               <Skeleton className="h-full w-full rounded-xl" />
             ) : chartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                No revenue data recorded in this period.
-              </div>
+              <EmptyState
+                title="No Revenue Data Recorded"
+                description="Revenue data will appear here once you have customers and visits."
+              />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ left: -16, right: 8, top: 8, bottom: 0 }}>
@@ -192,9 +252,10 @@ export function Analytics() {
             {isLoading ? (
               <Skeleton className="h-full w-full rounded-xl" />
             ) : growthData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                No new customer additions recorded.
-              </div>
+              <EmptyState
+                title="No Customer Additions Recorded"
+                description="Customer growth data will show up here as customers register."
+              />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={growthData} margin={{ left: -24, right: 8, top: 8, bottom: 0 }}>
@@ -222,59 +283,8 @@ export function Analytics() {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="rounded-2xl border border-slate-200 bg-white shadow-sm"
       >
-        <div className="flex items-center gap-3 border-b border-slate-200 px-6 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-            <Award className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-base font-semibold tracking-tight text-slate-900">Top Regular Customers</h2>
-            <p className="text-sm text-slate-500">Ranked by lifetime coffee spend</p>
-          </div>
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Customer</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead className="text-right">Visits</TableHead>
-              <TableHead className="text-right">Total Spent</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell><Skeleton className="h-4 w-36" /></TableCell>
-                  <TableCell><Skeleton className="h-4 w-28" /></TableCell>
-                  <TableCell className="text-right"><Skeleton className="ml-auto h-4 w-12" /></TableCell>
-                  <TableCell className="text-right"><Skeleton className="ml-auto h-4 w-16" /></TableCell>
-                </TableRow>
-              ))
-            ) : !data?.topCustomers || data.topCustomers.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="py-8 text-center text-sm text-slate-500">
-                  No regular customers recorded yet.
-                </TableCell>
-              </TableRow>
-            ) : (
-              data.topCustomers.map((c: any, index: number) => (
-                <TableRow key={c.id}>
-                  <TableCell className="font-medium text-slate-900 flex items-center gap-2">
-                    <span className="text-slate-400 font-mono text-xs w-4">#{index + 1}</span>
-                    {c.name}
-                  </TableCell>
-                  <TableCell className="text-slate-600">{c.phone}</TableCell>
-                  <TableCell className="text-right tabular-nums text-slate-700">{c.total_visits}</TableCell>
-                  <TableCell className="text-right font-medium tabular-nums text-[#1A1A1A]">
-                    {formatCurrency(c.lifetime_spent)}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <TopCustomersTable customers={data?.topCustomers} isLoading={isLoading} />
       </motion.section>
     </div>
   );

@@ -37,10 +37,10 @@ function RegisterVisitPage() {
         description: `${form.name} · $${Number(form.amount).toFixed(2)} added.`,
       });
       setForm(empty);
-      // Invalidate relevant queries to update dashboard and CRM statistics
-      queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+      // Invalidate relevant queries to update dashboard, CRM, and analytics statistics
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
     onError: () => toast.error("Could not log visit"),
   });

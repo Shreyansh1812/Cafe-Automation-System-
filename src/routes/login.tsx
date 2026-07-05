@@ -207,6 +207,7 @@ function LoginPage() {
       role: res.role,
       tenant_id: res.tenant_id,
       name: res.name,
+      business_name: res.business_name,
     });
     toast.success(`Welcome back${res.name ? `, ${res.name}` : ""}`);
     navigate({ to: dashboardPathFor(res.role), replace: true });
@@ -297,6 +298,7 @@ function LoginPage() {
                 placeholder="you@cafe.com"
                 className="h-11 bg-white focus-visible:ring-2 focus-visible:ring-amber-500/20"
                 required
+                suppressHydrationWarning
               />
             </div>
             <div className="space-y-2">
@@ -312,6 +314,7 @@ function LoginPage() {
                 placeholder="••••••••"
                 className="h-11 bg-white focus-visible:ring-2 focus-visible:ring-amber-500/20"
                 required
+                suppressHydrationWarning
               />
             </div>
 
@@ -325,6 +328,7 @@ function LoginPage() {
               type="submit"
               disabled={loading || googleLoading}
               className="h-11 w-full bg-[#1A1A1A] text-white hover:bg-black cursor-pointer"
+              suppressHydrationWarning
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sign in"}
             </Button>
@@ -389,6 +393,7 @@ function LoginPage() {
                 <button
                   key={d.email}
                   type="button"
+                  suppressHydrationWarning
                   onClick={() => fill(d.email)}
                   className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-slate-600 transition-colors hover:bg-slate-50"
                 >

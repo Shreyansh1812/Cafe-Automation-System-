@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { api } from "@/services/api";
@@ -17,12 +17,18 @@ export const Route = createFileRoute("/_app/barista/redeem")({
 function RedeemCouponPage() {
   const { user } = useAuth();
   const [code, setCode] = useState("");
+  const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: () =>
       api.redeemCoupon({
         coupon_code: code.trim(),
       }),
+    onSuccess: (res) => {
+      if (res && res.success) {
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      }
+    },
   });
 
   const result = mutation.data;
