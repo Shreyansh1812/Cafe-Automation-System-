@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { Customer, DashboardStats, Tenant, TopCustomer } from "@/types";
+import type { Customer, CustomerLookupResult, DashboardStats, Tenant, TopCustomer, RedemptionResult } from "@/types";
 import type { Role } from "@/lib/auth";
 import { toast } from "sonner";
+import { normalizePhone } from "@/utils/phone";
 
 const metaEnv = (typeof import.meta !== "undefined" && import.meta.env ? import.meta.env : {}) as any;
 const N8N_BASE_URL = metaEnv.VITE_N8N_WEBHOOK_BASE_URL || process.env.VITE_N8N_WEBHOOK_BASE_URL || "http://localhost:5678/webhook";
@@ -864,46 +865,16 @@ export const api = {
 
   registerVisit: async (payload: {
     tenant_id?: string;
+    customer_id?: string;
     name: string;
     phone: string;
     birthday: string;
     amount_spent: number;
   }): Promise<{ success: boolean; customer_id?: string; message: string }> => {
     try {
-      const storedTenantId = typeof window !== "undefined" ? localStorage.getItem("tenant_id") : null;
-      const tenant_id = payload.tenant_id || storedTenantId;
-      if (!tenant_id) {
-        throw new Error("No tenant found. Please log in again.");
-      }
-
-      const finalPayload = {
-        ...payload,
-        tenant_id,
-      };
-
-      const response = await fetch(`${N8N_BASE_URL}/cafe-entry`, {
-        method: "POST",
-        headers: getN8nHeaders(),
-        body: JSON.stringify(finalPayload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        throw new Error(`Server returned status ${response.status}: ${errorText}`);
-      }
-
-      const data = await response.json().catch(() => ({}));
-      return {
-        success: true,
-        customer_id: data.customer_id || undefined,
-        message: data.message || "Visit registered successfully",
-      };
+      return await registerVisit(payload);
     } catch (err: any) {
-      console.error("registerVisit failed:", err);
-      const errorMessage = err?.message || "Network error / CORS issue";
-      toast.error("Visit registration failed", {
-        description: errorMessage,
-      });
+      console.error("registerVisit delegate failed:", err);
       throw err;
     }
   },
@@ -913,35 +884,13 @@ export const api = {
     tenant_id?: string;
   }): Promise<{ success: boolean; message: string }> => {
     try {
-      const storedTenantId = typeof window !== "undefined" ? localStorage.getItem("tenant_id") : null;
-      const tenant_id = payload.tenant_id || storedTenantId;
-      if (!tenant_id) {
-        throw new Error("No tenant found. Please log in again.");
-      }
-
-      const finalPayload = {
-        ...payload,
-        tenant_id,
-      };
-
-      const response = await fetch(N8N_REDEMPTION_URL, {
-        method: "POST",
-        headers: getN8nHeaders(),
-        body: JSON.stringify(finalPayload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        throw new Error(`Server returned status ${response.status}: ${errorText}`);
-      }
-
-      const data = await response.json().catch(() => ({}));
+      const res = await redeemCoupon(payload);
       return {
-        success: data.success ?? true,
-        message: data.message || "Coupon redeemed successfully",
+        success: res.status === "SUCCESS",
+        message: res.message,
       };
     } catch (err: any) {
-      console.error("redeemCoupon failed:", err);
+      console.error("redeemCoupon delegate failed:", err);
       const errorMessage = err?.message || "Network error / CORS issue";
       toast.error("Coupon redemption failed", {
         description: errorMessage,
@@ -1111,4 +1060,230 @@ export const api = {
       return { success: false as const, message: err?.message || "Failed to complete registration" };
     }
   },
+};
+
+/**
+ * Check if a customer exists by phone number
+ * ACTUAL BACKEND: GET /api/customers/by-phone?phone=...&tenant_id=...
+ */
+export const checkCustomerByPhone = async (phone: string): Promise<CustomerLookupResult> => {
+    const tenant_id = typeof window !== 'undefined' ? localStorage.getItem('tenant_id') : null;
+    
+    if (!tenant_id) {
+        throw new Error('No tenant found. Please log in again.');
+    }
+
+    // Normalize phone number before sending to API
+    const normalizedPhone = normalizePhone(phone);
+
+    const response = await fetch(
+        `/api/customers/by-phone?phone=${encodeURIComponent(normalizedPhone)}&tenant_id=${tenant_id}`,
+        {
+            headers: {
+                'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') : ''}`,
+                'Content-Type': 'application/json',
+            },
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error('Failed to check customer.');
+    }
+
+    return response.json();
+};
+
+/**
+ * Register a new visit (new or existing customer)
+ */
+export const registerVisit = async (data: {
+    customer_id?: string;
+    name: string;
+    phone: string;
+    birthday: string;
+    amount_spent: number;
+}): Promise<{ success: boolean; customer_id: string; message: string }> => {
+    const tenant_id = typeof window !== 'undefined' ? localStorage.getItem('tenant_id') : null;
+    
+    if (!tenant_id) {
+        throw new Error('No tenant found. Please log in again.');
+    }
+
+    const payload = {
+        ...data,
+        tenant_id,
+        phone: normalizePhone(data.phone),
+    };
+
+    const response = await fetch('/api/visits', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') : ''}`,
+        },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({ message: 'Failed to log visit.' }));
+        throw new Error(error.message || 'Failed to log visit.');
+    }
+
+    return response.json();
+};
+
+async function executeDatabaseRedemptionFallback(couponCode: string, tenantId: string): Promise<RedemptionResult> {
+  console.log(`[FALLBACK] Running local database redemption fallback for coupon ${couponCode}...`);
+  const { sql } = await import("./db");
+
+  const result = await sql<RedemptionResult[]>`
+    WITH updated AS (
+        UPDATE active_coupons
+        SET is_redeemed = TRUE,
+            redeemed_at = NOW()
+        WHERE coupon_code = ${couponCode}
+          AND tenant_id = ${tenantId}
+          AND is_redeemed = FALSE
+          AND expiry_date > NOW()
+        RETURNING 
+            customer_id,
+            coupon_code,
+            is_redeemed,
+            redeemed_at,
+            expiry_date
+    )
+    SELECT 
+        u.customer_id,
+        u.coupon_code,
+        u.is_redeemed,
+        u.redeemed_at,
+        u.expiry_date,
+        'SUCCESS'::varchar AS status,
+        'Coupon redeemed successfully!'::varchar AS message,
+        c.name AS customer_name,
+        c.phone AS customer_phone,
+        c.total_visits,
+        c.lifetime_spend
+    FROM updated u
+    LEFT JOIN customers c ON u.customer_id = c.customer_id
+
+    UNION ALL
+
+    SELECT 
+        NULL::uuid AS customer_id,
+        a.coupon_code,
+        a.is_redeemed,
+        a.redeemed_at,
+        a.expiry_date,
+        'FAILED'::varchar AS status,
+        CASE 
+            WHEN a.is_redeemed = TRUE THEN '❌ This coupon has already been redeemed.'::varchar
+            WHEN a.expiry_date <= NOW() THEN '❌ This coupon has expired.'::varchar
+            WHEN a.coupon_code IS NULL THEN '❌ Coupon code not found.'::varchar
+            ELSE '❌ Coupon is not valid for redemption.'::varchar
+        END AS message,
+        NULL::varchar AS customer_name,
+        NULL::varchar AS customer_phone,
+        NULL::int AS total_visits,
+        NULL::numeric AS lifetime_spend
+    FROM active_coupons a
+    WHERE a.coupon_code = ${couponCode} AND a.tenant_id = ${tenantId}
+      AND NOT EXISTS (
+          SELECT 1 FROM updated WHERE updated.coupon_code = a.coupon_code
+      )
+
+    UNION ALL
+
+    SELECT 
+        NULL::uuid AS customer_id,
+        ${couponCode}::varchar AS coupon_code,
+        FALSE AS is_redeemed,
+        NULL::timestamp with time zone AS redeemed_at,
+        NULL::timestamp with time zone AS expiry_date,
+        'NOT_FOUND'::varchar AS status,
+        '❌ Coupon code not found for this cafe.'::varchar AS message,
+        NULL::varchar AS customer_name,
+        NULL::varchar AS customer_phone,
+        NULL::int AS total_visits,
+        NULL::numeric AS lifetime_spend
+    WHERE NOT EXISTS (
+        SELECT 1 FROM active_coupons WHERE coupon_code = ${couponCode} AND tenant_id = ${tenantId}
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM updated
+    );
+  `;
+
+  if (!result || result.length === 0) {
+    throw new Error("No response returned from redemption query.");
+  }
+  
+  return result[0];
+}
+
+export const redeemCouponServerFn = createServerFn({ method: "POST" })
+  .validator((data: { coupon_code: string; tenant_id: string }) => data)
+  .handler(async ({ data }) => {
+    console.log("redeemCouponServerFn handler executing on server side...");
+    const payload = {
+      coupon_code: data.coupon_code.trim().toUpperCase(),
+      tenant_id: data.tenant_id,
+    };
+
+    try {
+      console.log(`Attempting to send request to n8n webhook: ${N8N_REDEMPTION_URL}`);
+      const response = await fetch(N8N_REDEMPTION_URL, {
+        method: "POST",
+        headers: getN8nHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      const responseText = await response.text().catch(() => "");
+      
+      if (!response.ok) {
+        // Fallback if n8n returns 404 (Webhook toggle off/not registered)
+        if (response.status === 404 || responseText.includes("not registered")) {
+          console.warn("n8n webhook returned 404/not registered. Falling back to direct database execution.");
+          return await executeDatabaseRedemptionFallback(payload.coupon_code, payload.tenant_id);
+        }
+        throw new Error(`Server returned status ${response.status}: ${responseText || "Unknown error"}`);
+      }
+
+      // If response text is valid JSON, parse and return it
+      try {
+        const resData = JSON.parse(responseText);
+        return resData as RedemptionResult;
+      } catch (parseErr) {
+        throw new Error(`Failed to parse n8n response as JSON: ${responseText}`);
+      }
+    } catch (err: any) {
+      console.warn("n8n webhook call failed. Triggering database fallback. Error:", err.message);
+      try {
+        return await executeDatabaseRedemptionFallback(payload.coupon_code, payload.tenant_id);
+      } catch (fallbackErr: any) {
+        console.error("Direct database redemption fallback failed:", fallbackErr);
+        throw new Error(fallbackErr?.message || "Failed to redeem coupon via database fallback");
+      }
+    }
+  });
+
+/**
+ * Redeem a coupon (returns enhanced redemption result)
+ */
+export const redeemCoupon = async (data: {
+    coupon_code: string;
+    tenant_id?: string;
+}): Promise<RedemptionResult> => {
+    const tenant_id = data.tenant_id || (typeof window !== 'undefined' ? localStorage.getItem('tenant_id') : null);
+    
+    if (!tenant_id) {
+        throw new Error('No tenant found. Please log in again.');
+    }
+
+    return redeemCouponServerFn({
+        data: {
+            coupon_code: data.coupon_code.trim().toUpperCase(),
+            tenant_id,
+        }
+    });
 };
