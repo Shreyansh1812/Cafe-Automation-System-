@@ -12,4 +12,15 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      proxy: {
+        "/webhook": {
+          target: "http://localhost:5678",
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+    },
+  },
 });

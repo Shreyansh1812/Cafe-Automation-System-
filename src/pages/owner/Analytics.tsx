@@ -12,15 +12,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { TrendingUp, Users, DollarSign, Award, ShoppingBag } from "lucide-react";
+import { TrendingUp, Users, IndianRupee, Award, ShoppingBag } from "lucide-react";
 import { api } from "@/services/api";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { TopCustomersTable } from "@/components/shared/TopCustomersTable";
+import { formatCurrencyINR } from "@/utils/date";
 
 function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  return formatCurrencyINR(n);
 }
 
 function formatDate(dateStr: string) {
@@ -108,7 +109,7 @@ export function Analytics() {
         >
           <div className="flex items-center justify-between">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-200/50">
-              <DollarSign className="h-4 w-4" />
+              <IndianRupee className="h-4 w-4" />
             </div>
             <span className="text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
               {rangeText}
@@ -221,7 +222,7 @@ export function Analytics() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${v}`} />
                   <Tooltip
                     contentStyle={{
                       borderRadius: 12,

@@ -1,5 +1,8 @@
 import "./lib/error-capture";
 
+// Set global timezone for the server-side
+process.env.TZ = 'Asia/Kolkata';
+
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 

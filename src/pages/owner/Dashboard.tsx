@@ -9,11 +9,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Users, Coffee, DollarSign, Ticket } from "lucide-react";
+import { Users, Coffee, IndianRupee, Ticket } from "lucide-react";
 import { api } from "@/services/api";
 import { useAuth } from "@/lib/auth";
 import { StatCard } from "@/components/shared/StatCard";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { formatCurrencyINR } from "@/utils/date";
 import {
   Table,
   TableBody,
@@ -32,7 +33,7 @@ const containerVariants = {
 };
 
 function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  return formatCurrencyINR(n);
 }
 
 export function Dashboard() {
@@ -75,7 +76,7 @@ export function Dashboard() {
           title="Lifetime Revenue"
           value={data?.lifetimeRevenue}
           previousValue={data?.previousRevenue}
-          icon={DollarSign}
+          icon={IndianRupee}
           isLoading={isLoading}
           format={formatCurrency}
         />

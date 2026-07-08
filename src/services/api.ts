@@ -20,6 +20,63 @@ const getN8nHeaders = (): Record<string, string> => {
   return headers;
 };
 
+/**
+ * Helper function to call n8n webhook with proper CORS, proxy, and logging handling.
+ * Resolves to the Vite proxy endpoint (/webhook/...) on the browser client,
+ * and the absolute N8N local URL on the Node.js server (SSR / Server Functions).
+ */
+const callN8nWebhook = async (path: string, payload: any): Promise<any> => {
+  const isServer = typeof window === 'undefined';
+  
+  // Base path formatting: normalize path (ensure it doesn't duplicate '/webhook')
+  const relativePath = path.startsWith('/webhook') ? path.replace(/^\/webhook/, '') : path;
+  
+  // Determine target URL based on execution context:
+  // Client (browser) routes through Vite proxy at /webhook
+  // Server (SSR/ServerFn) fetches the direct n8n URL
+  const url = isServer
+    ? `${N8N_BASE_URL}${relativePath}`
+    : `/webhook${relativePath}`;
+
+  console.log(`[DEBUG] calling n8n webhook (${isServer ? 'server-side' : 'client-side'}):`, {
+    url,
+    payload,
+    origin: typeof window !== 'undefined' ? window.location.origin : 'SSR-Server',
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: getN8nHeaders(),
+      body: JSON.stringify(payload),
+    });
+
+    console.log('[DEBUG] Response status:', response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[ERROR] Webhook failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText,
+      });
+      throw new Error(`Server returned ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('[DEBUG] Webhook success:', data);
+    return data;
+  } catch (error: any) {
+    console.error('[ERROR] Fetch failed:', error);
+    
+    // Provide user-friendly error messages for network connectivity issues
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      throw new Error('Cannot connect to the server. Please ensure n8n is running and CORS is configured.');
+    }
+    throw error;
+  }
+};
+
 export type LoginResult =
   | { success: true; role: Role; tenant_id?: string; name?: string; email: string; business_name?: string }
   | { success: false; message: string };
@@ -1115,21 +1172,29 @@ export const registerVisit = async (data: {
         phone: normalizePhone(data.phone),
     };
 
-    const response = await fetch('/api/visits', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') : ''}`,
-        },
-        body: JSON.stringify(payload),
-    });
+    try {
+        // Try calling n8n webhook directly via client proxy
+        return await callN8nWebhook('/webhook/cafe-entry', payload);
+    } catch (err: any) {
+        console.warn("n8n webhook call failed. Triggering database fallback. Error:", err.message);
+        
+        // Fallback to local database visit logging via /api/visits
+        const response = await fetch('/api/visits', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('token') : ''}`,
+            },
+            body: JSON.stringify(payload),
+        });
 
-    if (!response.ok) {
-        const error = await response.json().catch(() => ({ message: 'Failed to log visit.' }));
-        throw new Error(error.message || 'Failed to log visit.');
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ message: 'Failed to log visit.' }));
+            throw new Error(error.message || 'Failed to log visit.');
+        }
+
+        return response.json();
     }
-
-    return response.json();
 };
 
 async function executeDatabaseRedemptionFallback(couponCode: string, tenantId: string): Promise<RedemptionResult> {
@@ -1280,10 +1345,24 @@ export const redeemCoupon = async (data: {
         throw new Error('No tenant found. Please log in again.');
     }
 
-    return redeemCouponServerFn({
-        data: {
-            coupon_code: data.coupon_code.trim().toUpperCase(),
-            tenant_id,
-        }
-    });
+    const normalizedCode = data.coupon_code.trim().toUpperCase();
+    const payload = {
+        coupon_code: normalizedCode,
+        tenant_id,
+    };
+
+    try {
+        // Try calling n8n webhook directly via client proxy
+        return await callN8nWebhook('/webhook/redemption', payload);
+    } catch (err: any) {
+        console.warn("n8n webhook call failed. Triggering database fallback. Error:", err.message);
+        
+        // Fallback to server function for direct database redemption
+        return redeemCouponServerFn({
+            data: {
+                coupon_code: normalizedCode,
+                tenant_id,
+            }
+        });
+    }
 };

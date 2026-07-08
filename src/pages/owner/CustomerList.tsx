@@ -5,6 +5,7 @@ import { Search, Coffee, Phone, Calendar, Crown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { useAuth } from "@/lib/auth";
+import { formatCurrencyINR } from "@/utils/date";
 import type { Customer } from "@/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,7 +30,7 @@ import {
 } from "@/components/ui/sheet";
 
 function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+  return formatCurrencyINR(n);
 }
 
 function initials(name: string) {

@@ -12,6 +12,9 @@ if (isServer) {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
+    onconnect: (conn) => {
+      return conn`SET TIMEZONE = 'Asia/Kolkata'`;
+    },
   });
 } else {
   // Client-side stub to prevent import errors in browser bundle

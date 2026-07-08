@@ -7,7 +7,7 @@ import {
   User, 
   Phone, 
   Calendar, 
-  DollarSign, 
+  IndianRupee, 
   Loader2, 
   Sparkles, 
   Clock, 
@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { formatPhoneDisplay } from "@/utils/phone";
+import { formatDateIST, formatCurrencyINR } from "@/utils/date";
 
 interface RedemptionResult {
   status: "SUCCESS" | "FAILED" | "NOT_FOUND";
@@ -89,16 +90,7 @@ export default function RedeemCoupon() {
     setResult(null);
   };
 
-  const formatDate = (date: string | null) => {
-    if (!date) return "N/A";
-    return new Date(date).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  // Dates and currency formatting functions are imported from "@/utils/date"
 
   return (
     <motion.div
@@ -245,7 +237,7 @@ export default function RedeemCoupon() {
                         {result.redeemed_at && (
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Redeemed At</p>
-                            <p className="font-semibold text-slate-700 mt-0.5">{formatDate(result.redeemed_at)}</p>
+                            <p className="font-semibold text-slate-700 mt-0.5">{formatDateIST(result.redeemed_at)}</p>
                           </div>
                         )}
                         {result.expiry_date && (
@@ -258,7 +250,7 @@ export default function RedeemCoupon() {
                                   : "text-slate-700"
                               }`}
                             >
-                              {formatDate(result.expiry_date)}
+                              {formatDateIST(result.expiry_date)}
                               {new Date(result.expiry_date) < new Date() && !result.is_redeemed && " (Expired)"}
                             </p>
                           </div>
@@ -291,9 +283,8 @@ export default function RedeemCoupon() {
                             </div>
                             <div>
                               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Lifetime Spend</p>
-                              <div className="flex items-center gap-1 text-slate-800 mt-0.5 font-semibold">
-                                <DollarSign className="w-3.5 h-3.5 text-slate-400" />
-                                ₹{result.lifetime_spend?.toLocaleString() || 0}
+                              <div className="flex items-center text-slate-800 mt-0.5 font-semibold">
+                                {formatCurrencyINR(result.lifetime_spend)}
                               </div>
                             </div>
                           </div>

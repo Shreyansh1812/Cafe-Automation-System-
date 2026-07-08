@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TopCustomer } from "@/types";
+import { formatCurrencyINR } from "@/utils/date";
 
 interface TopCustomersTableProps {
   customers: TopCustomer[] | undefined;
@@ -16,7 +17,7 @@ interface TopCustomersTableProps {
 }
 
 function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  return formatCurrencyINR(n);
 }
 
 export function TopCustomersTable({ customers, isLoading = false }: TopCustomersTableProps) {
